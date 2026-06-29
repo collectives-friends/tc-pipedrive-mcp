@@ -219,40 +219,54 @@ server.tool(
       if (searchTitle) {
         // @ts-ignore - Bypass incorrect TypeScript definition
         const searchResponse = await dealsApi.searchDeals(searchTitle);
-        filteredDeals = searchResponse.data || [];
+        // The deal-search endpoint returns { data: { items: [{ item: {...} }] } },
+        // NOT a plain array. Unwrap items -> item so the downstream .filter/.map
+        // calls work instead of throwing "filteredDeals.filter is not a function".
+        const items = (searchResponse?.data as any)?.items ?? [];
+        filteredDeals = items.map((entry: any) => entry.item ?? entry);
       } else {
-        // Calculate the date filter (daysBack days ago)
-        const filterDate = new Date();
-        filterDate.setDate(filterDate.getDate() - daysBack);
-        const startDate = filterDate.toISOString().split('T')[0]; // Format as YYYY-MM-DD
+        // Page through ALL matching deals. The Pipedrive list endpoint is
+        // paginated (additional_data.pagination.more_items_in_collection); a
+        // single call only returns the first page, which is why newly-created
+        // deals never showed up. Sort by add_time DESC so the newest lead.
+        const pageSize = 500;
+        let start = 0;
+        const SAFETY_MAX = 10000; // hard stop to avoid runaway loops
+        while (filteredDeals.length < SAFETY_MAX) {
+          const params: any = {
+            sort: 'add_time DESC',
+            status: status,
+            limit: pageSize,
+            start: start
+          };
 
-        // Build API parameters (using actual Pipedrive API parameter names)
-        const params: any = {
-          sort: 'last_activity_date DESC',
-          status: status,
-          limit: limit
-        };
+          // Add optional filters
+          if (ownerId) params.user_id = ownerId;
+          if (stageId) params.stage_id = stageId;
+          if (pipelineId) params.pipeline_id = pipelineId;
 
-        // Add optional filters
-        if (ownerId) params.user_id = ownerId;
-        if (stageId) params.stage_id = stageId;
-        if (pipelineId) params.pipeline_id = pipelineId;
+          // @ts-ignore - getDeals accepts parameters but types may be incomplete
+          const response = await dealsApi.getDeals(params);
+          const batch = response?.data || [];
+          filteredDeals.push(...batch);
 
-        // Fetch deals with filters
-        // @ts-ignore - getDeals accepts parameters but types may be incomplete
-        const response = await dealsApi.getDeals(params);
-        filteredDeals = response.data || [];
+          const pagination = (response as any)?.additional_data?.pagination;
+          if (!pagination?.more_items_in_collection) break;
+          start = pagination.next_start ?? (start + pageSize);
+        }
       }
 
       // Apply additional client-side filtering
 
-      // Filter by date if not searching by title
+      // Filter by last-activity date if not searching by title. Deals with no
+      // activity yet (typically freshly-created ones) are KEPT — dropping them
+      // is part of why new deals never reached the feed.
       if (!searchTitle) {
         const filterDate = new Date();
         filterDate.setDate(filterDate.getDate() - daysBack);
 
         filteredDeals = filteredDeals.filter((deal: any) => {
-          if (!deal.last_activity_date) return false;
+          if (!deal.last_activity_date) return true;
           const dealActivityDate = new Date(deal.last_activity_date);
           return dealActivityDate >= filterDate;
         });
@@ -308,6 +322,33 @@ server.tool(
         limit_applied: limit
       };
 
+      // The v1 deals payload carries stage_id / pipeline_id as bare integers
+      // (no nested name object), so resolve names via lookup maps. Owner/org/
+      // person come back as flattened *_name fields (or expanded objects on some
+      // API versions) — read both shapes defensively. This is why every name
+      // came back "Unknown": the old code read deal.stage/pipeline/owner objects
+      // that the list endpoint never returns.
+      const [stagesRes, pipelinesRes, usersRes] = await Promise.all([
+        // @ts-ignore - getStages with no pipeline returns all stages
+        stagesApi.getStages().catch(() => ({ data: [] as any[] })),
+        pipelinesApi.getPipelines().catch(() => ({ data: [] as any[] })),
+        usersApi.getUsers().catch(() => ({ data: [] as any[] })),
+      ]);
+      const stageNameById = new Map<number, string>(
+        (((stagesRes as any)?.data || []) as any[]).map((s: any) => [s.id, s.name])
+      );
+      const pipelineNameById = new Map<number, string>(
+        (((pipelinesRes as any)?.data || []) as any[]).map((p: any) => [p.id, p.name])
+      );
+      const userNameById = new Map<number, string>(
+        (((usersRes as any)?.data || []) as any[]).map((u: any) => [u.id, u.name])
+      );
+      const resolveOwnerName = (deal: any): string => {
+        if (deal.owner_name) return deal.owner_name;
+        const uid = typeof deal.user_id === 'object' ? deal.user_id?.id : deal.user_id;
+        return userNameById.get(uid) ?? 'Unknown';
+      };
+
       // Summarize deals to avoid massive responses but include notes and booking details
       const bookingFieldKey = "8f4b27fbd9dfc70d2296f23ce76987051ad7324e";
       const summarizedDeals = filteredDeals.map((deal: any) => ({
@@ -316,11 +357,11 @@ server.tool(
         value: deal.value,
         currency: deal.currency,
         status: deal.status,
-        stage_name: deal.stage?.name || 'Unknown',
-        pipeline_name: deal.pipeline?.name || 'Unknown',
-        owner_name: deal.owner?.name || 'Unknown',
-        organization_name: deal.org?.name || null,
-        person_name: deal.person?.name || null,
+        stage_name: stageNameById.get(deal.stage_id) ?? 'Unknown',
+        pipeline_name: pipelineNameById.get(deal.pipeline_id) ?? 'Unknown',
+        owner_name: resolveOwnerName(deal),
+        organization_name: deal.org_name ?? deal.org_id?.name ?? deal.org?.name ?? null,
+        person_name: deal.person_name ?? deal.person_id?.name ?? deal.person?.name ?? null,
         add_time: deal.add_time,
         last_activity_date: deal.last_activity_date,
         close_time: deal.close_time,
@@ -342,7 +383,7 @@ server.tool(
               : `Found ${filteredDeals.length} deals matching the specified filters`,
             filters_applied: filterSummary,
             total_found: filteredDeals.length,
-            deals: summarizedDeals.slice(0, 30) // Limit to 30 deals max to prevent huge responses
+            deals: summarizedDeals.slice(0, Math.min(limit, 200)) // honor requested limit, capped at 200 to bound response size
           }, null, 2)
         }]
       };
