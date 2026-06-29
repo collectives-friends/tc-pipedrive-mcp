@@ -223,7 +223,28 @@ server.tool(
         // NOT a plain array. Unwrap items -> item so the downstream .filter/.map
         // calls work instead of throwing "filteredDeals.filter is not a function".
         const items = (searchResponse?.data as any)?.items ?? [];
-        filteredDeals = items.map((entry: any) => entry.item ?? entry);
+        const hits = items.map((entry: any) => entry.item ?? entry);
+        // Search hits are a sparse projection (no stage_id/pipeline_id/user_id),
+        // so the name maps below can't resolve them — names came back "Unknown".
+        // Hydrate each hit into the full deal via get-deal so stage/pipeline/
+        // owner names resolve the same way as the list path. Capped to bound the
+        // per-hit fan-out.
+        const ids = hits
+          .map((h: any) => h.id)
+          .filter((id: any) => id != null)
+          .slice(0, 50);
+        const hydrated = await Promise.all(
+          ids.map(async (id: number) => {
+            try {
+              // @ts-ignore - getDeal expects just the id
+              const r = await dealsApi.getDeal(id);
+              return (r as any)?.data ?? null;
+            } catch {
+              return null;
+            }
+          })
+        );
+        filteredDeals = hydrated.filter(Boolean);
       } else {
         // Page through ALL matching deals. The Pipedrive list endpoint is
         // paginated (additional_data.pagination.more_items_in_collection); a
