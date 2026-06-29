@@ -1,0 +1,19 @@
+src/index.ts
+  s_b48ae2dc9fc5ac::t_6840de0070ea36 226-247
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.3",
+  "base_commit_sha": "3675f6e47df11fc8f40b8c113735ecd21af5e80f",
+  "prompts": {},
+  "sessions": {
+    "s_b48ae2dc9fc5ac": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "220924f4-edb4-48e2-a9ec-c5676e63d53c",
+        "model": "claude-opus-4-8"
+      },
+      "human_author": "Stefan Rosenlund <mail@stefanrosenlund.dk>"
+    }
+  }
+}
