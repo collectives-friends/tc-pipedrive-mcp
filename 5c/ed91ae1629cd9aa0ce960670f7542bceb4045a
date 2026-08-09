@@ -1,0 +1,19 @@
+infisical-entrypoint.sh
+  s_7dd1331c8e6c80::t_ac5194261a3150 10
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.21",
+  "base_commit_sha": "5ced91ae1629cd9aa0ce960670f7542bceb4045a",
+  "prompts": {},
+  "sessions": {
+    "s_7dd1331c8e6c80": {
+      "agent_id": {
+        "tool": "cursor",
+        "id": "e13ef17a-d4c9-4c49-b5d0-718d8851d043",
+        "model": "grok-4.5"
+      },
+      "human_author": "Stefan Rosenlund <mail@stefanrosenlund.dk>"
+    }
+  }
+}
