@@ -1,30 +1,60 @@
 name: auto-update
 on:
   schedule:
-    - cron: '23 4 * * 1'   # mandag 04:23 UTC
+    - cron: "23 4 * * 1" # mandag 04:23 UTC
   workflow_dispatch:
 permissions:
   contents: write
+  pull-requests: write
+  issues: write
 jobs:
   sync:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
         with: { fetch-depth: 0 }
-      - name: Merge upstream (WillDent)
+      - name: Merge upstream (WillDent) into PR branch
         id: merge
+        env: { GH_TOKEN: "${{ secrets.GITHUB_TOKEN }}" }
         run: |
+          set -euo pipefail
           git config user.name "auto-update"
           git config user.email "auto-update@users.noreply.github.com"
           git remote add upstream https://github.com/WillDent/pipedrive-mcp-server.git
-          git fetch upstream
+          git fetch upstream main
+          BRANCH="auto-update/upstream-$(date -u +%Y%m%d)"
+          git checkout -B "$BRANCH"
           BEFORE=$(git rev-parse HEAD)
-          if ! git merge --no-edit upstream/main; then
-            echo "::error::Merge-konflikt med upstream — kraever manuel resolution"
-            git merge --abort; exit 1
+          if git merge --no-edit upstream/main; then
+            AFTER=$(git rev-parse HEAD)
+            if [ "$BEFORE" = "$AFTER" ]; then
+              echo "status=noop" >> "$GITHUB_OUTPUT"
+              echo "Ingen nye upstream-commits."
+              exit 0
+            fi
+            git push -u origin "$BRANCH"
+            gh pr create --title "chore: sync upstream WillDent/pipedrive-mcp-server" \
+              --body "Automatisk upstream-merge. Review Infisical/Dockerfile TC-ændringer før merge." \
+              --base main --head "$BRANCH" || true
+            echo "status=pr" >> "$GITHUB_OUTPUT"
+          else
+            git merge --abort || true
+            # Soft-fail: konflikt er forventet når TC-fork divergerer (Infisical entrypoint m.m.).
+            # Åbn issue i stedet for rød schedule-failure uden actionable PR.
+            TITLE="auto-update: upstream merge-konflikt $(date -u +%Y-%m-%d)"
+            BODY=$(cat <<EOF
+          Weekly upstream merge fra WillDent/pipedrive-mcp-server fejlede med konflikt.
+          TC-fork har Infisical/Dockerfile/CI-ændringer der divergerer.
+          Manuel resolution kræves — eller deaktivér denne schedule midlertidigt.
+          Run: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          EOF
+          )
+            EXISTING=$(gh issue list --search "auto-update: upstream merge-konflikt in:title" --state open --json number --jq '.[0].number')
+            if [ -z "$EXISTING" ]; then
+              gh issue create --title "$TITLE" --body "$BODY"
+            else
+              gh issue comment "$EXISTING" --body "$BODY"
+            fi
+            echo "status=conflict" >> "$GITHUB_OUTPUT"
+            echo "::notice::Upstream merge-konflikt — issue oprettet/opdateret (job exits 0)"
           fi
-          AFTER=$(git rev-parse HEAD)
-          [ "$BEFORE" != "$AFTER" ] && echo "changed=true" >> $GITHUB_OUTPUT || echo "changed=false" >> $GITHUB_OUTPUT
-      - name: Push (Sliplane autoDeploy fanger push'et)
-        if: steps.merge.outputs.changed == 'true'
-        run: git push origin HEAD:main
