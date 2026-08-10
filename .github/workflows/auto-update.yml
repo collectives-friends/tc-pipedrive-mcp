@@ -6,7 +6,6 @@ on:
 permissions:
   contents: write
   pull-requests: write
-  issues: write
 jobs:
   sync:
     runs-on: ubuntu-latest
@@ -39,22 +38,8 @@ jobs:
             echo "status=pr" >> "$GITHUB_OUTPUT"
           else
             git merge --abort || true
-            # Soft-fail: konflikt er forventet når TC-fork divergerer (Infisical entrypoint m.m.).
-            # Åbn issue i stedet for rød schedule-failure uden actionable PR.
-            TITLE="auto-update: upstream merge-konflikt $(date -u +%Y-%m-%d)"
-            BODY=$(cat <<EOF
-          Weekly upstream merge fra WillDent/pipedrive-mcp-server fejlede med konflikt.
-          TC-fork har Infisical/Dockerfile/CI-ændringer der divergerer.
-          Manuel resolution kræves — eller deaktivér denne schedule midlertidigt.
-          Run: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
-          EOF
-          )
-            EXISTING=$(gh issue list --search "auto-update: upstream merge-konflikt in:title" --state open --json number --jq '.[0].number')
-            if [ -z "$EXISTING" ]; then
-              gh issue create --title "$TITLE" --body "$BODY"
-            else
-              gh issue comment "$EXISTING" --body "$BODY"
-            fi
+            # Issues er disabled på dette repo — soft-exit så schedule ikke er permanent rød.
+            echo "::notice::Upstream merge-konflikt (WillDent). TC-fork divergerer (Infisical/Dockerfile). Manuel sync kræves."
             echo "status=conflict" >> "$GITHUB_OUTPUT"
-            echo "::notice::Upstream merge-konflikt — issue oprettet/opdateret (job exits 0)"
+            exit 0
           fi
