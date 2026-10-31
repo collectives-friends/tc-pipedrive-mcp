@@ -16,7 +16,7 @@
     "jsonwebtoken": "^9.0.2",
     "pipedrive": "^22.10.1",
     "ts-node": "^10.9.2",
-    "zod": "^3.22.4"
+    "zod": "^4.6.7"
   },
   "devDependencies": {
     "@types/jsonwebtoken": "^9.0.6",
